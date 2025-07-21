@@ -1,0 +1,7 @@
+streamlit>=1.30.0
+numpy
+tensorflow>=2.18.0
+scikit-learn
+Pillow
+joblib
+
