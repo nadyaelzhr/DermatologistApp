@@ -1,103 +1,123 @@
 import streamlit as st
-st.set_page_config(layout="wide")
-st.markdown(
-    """
-    <style>
-    .stApp {
-        background-color: #ffffff;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-
-import numpy as np
-import json
-import pickle
 from PIL import Image
-import tensorflow as tf
-import joblib
+import numpy as np
+import os
+import time
+from ultralytics import YOLO
+from utils.preprocessing import resize_yolo, normalize_yolo
 
+# ====== PATH & MODEL ======
+MODEL_PATH = "models/yolo_model.pt"
+LOGO_PATH = "assets/logo.png"
 
+# ====== LABEL MAP (Internal) ======
+label_map = {
+  "Akiec": "AKIEC (Actinic Keratoses and Intraepithelial Carcinoma) adalah kondisi kulit yang merupakan gabungan antara actinic keratoses (AK) dan karsinoma in situ, yaitu kanker kulit tahap awal yang belum menyebar ke jaringan lebih dalam. Lesi AKIEC biasanya muncul sebagai plak tebal, kasar, dan bersisik dengan warna kemerahan atau kecokelatan, dan umumnya ditemukan di area kulit yang sering terpapar sinar matahari seperti wajah, kulit kepala, telinga, dan tangan. Gejala yang mungkin dirasakan meliputi gatal, nyeri ringan, atau bahkan luka yang mudah berdarah. Karena AKIEC sudah mengandung sel kanker tahap awal, pengobatannya lebih intensif dibanding AK biasa, seperti melalui eksisi bedah, kuretase dengan elektrokauter, terapi fotodinamik, atau penggunaan krim topikal khusus seperti 5-fluorouracil. Penanganan yang cepat dan tepat sangat penting untuk mencegah perkembangan menjadi karsinoma sel skuamosa invasif yang lebih berbahaya.",
+  "Bcc": "Basal Cell Carcinoma (BCC) adalah jenis kanker kulit yang paling umum dan berasal dari sel basal, yaitu sel-sel di lapisan dasar epidermis. Kanker ini tumbuh perlahan dan jarang menyebar ke bagian tubuh lain, tetapi dapat merusak jaringan sekitarnya jika tidak segera ditangani. BCC biasanya disebabkan oleh paparan sinar ultraviolet (UV) yang berlebihan, baik dari sinar matahari maupun tanning bed. Ciri-cirinya meliputi benjolan kecil berwarna merah muda, keputihan, atau seperti mutiara yang mengkilap, dan sering kali tampak seperti luka yang tidak sembuh-sembuh, berkerak, atau berdarah. Lesi umumnya muncul di area yang sering terpapar sinar matahari seperti wajah, hidung, telinga, dan leher. Pengobatan BCC dapat dilakukan melalui eksisi bedah, kuretase dan elektrokauter, terapi fotodinamik, penggunaan krim topikal seperti imiquimod atau 5-fluorouracil, serta terapi radiasi untuk kasus tertentu. Pencegahan dapat dilakukan dengan menggunakan tabir surya, menghindari paparan sinar matahari langsung, dan rutin memeriksa kondisi kulit untuk deteksi dini.",
+  "Df": "Dermatofibroma adalah tumor jinak pada kulit yang umumnya tidak berbahaya dan sering ditemukan pada orang dewasa, terutama wanita. Lesi ini muncul sebagai benjolan kecil yang keras, berwarna cokelat, merah muda, atau keabu-abuan, biasanya berdiameter kurang dari 1 cm dan sering terdapat di tungkai bawah, lengan, atau punggung. Ciri khas dermatofibroma adalah permukaannya yang menonjol atau agak cekung ke dalam jika ditekan (dimple sign), serta terasa kenyal atau padat saat diraba. Lesi ini biasanya tidak menimbulkan rasa sakit, tetapi bisa terasa gatal atau nyeri jika teriritasi. Pengobatan umumnya tidak diperlukan karena sifatnya jinak, namun bisa diangkat melalui pembedahan jika menyebabkan ketidaknyamanan, terus tumbuh, atau mengganggu secara kosmetik. Pemeriksaan kulit tetap penting untuk memastikan diagnosis dan membedakannya dari lesi kulit lain yang lebih serius.",
+  "Nv": "Melanocytic Nevi, atau yang lebih dikenal sebagai tahi lalat, adalah pertumbuhan jinak pada kulit yang berasal dari sel melanosit, yaitu sel penghasil pigmen melanin. Lesi ini umumnya berwarna cokelat, hitam, atau kebiruan, dengan bentuk bulat atau oval, tepi yang teratur, dan permukaan yang halus atau sedikit menonjol. Melanocytic nevi dapat muncul sejak lahir (congenital nevi) atau berkembang seiring waktu (acquired nevi), dan sering ditemukan di area tubuh manapun. Meskipun sebagian besar tidak berbahaya, perubahan pada ukuran, warna, bentuk, atau gejala seperti gatal dan perdarahan perlu diwaspadai karena bisa menjadi tanda transformasi menuju melanoma. Pengobatan biasanya tidak diperlukan, tetapi tahi lalat dapat diangkat melalui pembedahan jika dicurigai ganas, mengganggu penampilan, atau sering teriritasi. Pemeriksaan rutin dan pemantauan perubahan pada tahi lalat penting untuk mendeteksi potensi risiko kanker kulit secara dini."
+}
+# bikin map lowercase agar pencocokan label tidak sensitif kapital
+label_map_lower = {k.lower(): v for k, v in label_map.items()}
 
-# Load label map
-with open("label_map.json", "r") as f:
-    label_map = json.load(f)
+# ====== LOAD YOLO MODEL ======
+try:
+    model = YOLO(MODEL_PATH)
+except Exception as e:
+    st.error(f"Gagal memuat model YOLO: {e}")
+    st.stop()
 
-# Load CNN model (.h5)
-@st.cache_resource
-def load_cnn_model():
-    return tf.keras.models.load_model("models/cnn_model.h5")
+# ====== STYLING ======
+st.markdown("""
+    <style>
+        .stImage > img {
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            background-color: white;
+            padding: 6px;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
-# Load Random Forest model (.pkl)
-@st.cache_resource
+# ====== HEADER ======
+col_logo, col_title = st.columns([1, 5])
+with col_logo:
+    if os.path.exists(LOGO_PATH):
+        st.image(LOGO_PATH, width=150)
+with col_title:
+    st.markdown("<h1 style='margin-bottom:0;'>Dermatologist App - YOLOv8</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='margin-top:4px;color:#444;'>Deteksi dan klasifikasi penyakit kulit menggunakan YOLOv8.</p>", unsafe_allow_html=True)
 
-def load_rf_model():
-    return joblib.load("models/rf_model.pkl")
+st.write("---")
+st.write("Unggah gambar kulit yang jelas (JPG/PNG). Klik **Submit** untuk melihat hasil deteksi dan klasifikasi.")
 
+# ====== UPLOAD & SUBMIT ======
+uploaded_file = st.file_uploader("📂 Unggah gambar kulit", type=["jpg", "jpeg", "png"])
+submit = st.button("🔍 Submit untuk Prediksi YOLOv8")
 
-# Preprocessing image for CNN
-def preprocess_image_cnn(image):
-    image = image.resize((224, 224))
-    img_array = np.array(image) / 255.0
-    return np.expand_dims(img_array, axis=0)
-
-# Preprocessing image for Random Forest
-def preprocess_image_rf(image):
-    image = image.resize((64, 64))
-    img_array = np.array(image).flatten()  # 64x64x3 -> 12288
-    return img_array.reshape(1, -1)
-
-# Streamlit layout config
-col1, col_mid, col2 = st.columns([6, 1, 6])
-
-with col1:
-    st.image("assets/logo.png", width=120)
-    st.title("Dermatologist APP")
-    st.write("Deteksi Penyakit Kulit menggunakan AI")
-
-    uploaded_file = st.file_uploader("Upload Gambar Kulit", type=["jpg", "jpeg", "png"])
-    model_choice = st.selectbox("Pilih Algoritma", ["CNN", "Random Forest"])
-    predict_btn = st.button("Submit")
-
-    with st.expander("Tentang Aplikasi Dermatologist"):
-        st.write("""
-            Aplikasi ini membantu pengguna mengidentifikasi potensi penyakit kulit melalui gambar.
-            Pengguna dapat memilih metode prediksi menggunakan model CNN atau Random Forest,
-            memberikan fleksibilitas sesuai kebutuhan. Aplikasi ini bersifat eksperimental dan
-            tidak menggantikan diagnosis dokter secara langsung.
-        """)
-
-with col_mid:
-    st.markdown(
-        "<div style='border-left: 3px solid lightblue; height: 100vh;'></div>",
-        unsafe_allow_html=True
-    )
-
-with col2:
-    if predict_btn and uploaded_file is not None:
+if uploaded_file is not None and submit:
+    try:
         image = Image.open(uploaded_file).convert("RGB")
-        st.subheader("HASIL PREDIKSI")
-        st.image(image, caption="Gambar yang Diupload", width=300)
+    except Exception as e:
+        st.error(f"Gagal membuka gambar: {e}")
+        st.stop()
 
-        if model_choice == "CNN":
-            model = load_cnn_model()
-            input_image = preprocess_image_cnn(image)
-            prediction = model.predict(input_image)
-            class_idx = np.argmax(prediction)
-            confidence = prediction[0][class_idx] * 100
+    # ====== PREPROCESSING ======
+    resized_img = resize_yolo(image, size=(640, 640))
+    normalized_img = normalize_yolo(resized_img)
 
-        elif model_choice == "Random Forest":
-            model = load_rf_model()
-            input_image = preprocess_image_rf(image)
-            class_idx = model.predict(input_image)[0]
-            confidence = max(model.predict_proba(input_image)[0]) * 100
+    # ====== PREDIKSI ======
+    start_time = time.time()
+    results = model.predict(np.array(normalized_img), imgsz=640, conf=0.25)
+    end_time = time.time()
 
-        class_name = label_map[str(class_idx)]
-        st.write(f"**Nama Penyakit:** {class_name}")
-        st.write(f"**Akurasi:** {confidence:.2f}%")
-        st.write(f"**Algoritma yang digunakan:** {model_choice}")
-        st.markdown("---")
-        st.subheader("Deskripsi Penyakit")
-        st.write(label_map.get(f"{class_idx}_desc", "Deskripsi belum tersedia."))
+    if not results:
+        st.warning("Tidak ada objek terdeteksi.")
+        st.stop()
+
+    # Ambil hasil deteksi pertama
+    result = results[0]
+    if len(result.boxes) > 0:
+        class_id = int(result.boxes.cls[0])
+        predicted_label = model.names[class_id]
+    else:
+        predicted_label = "Tidak terdefinisikan"
+
+    # Simpan hasil deteksi dengan bounding box
+    bbox_img_path = "deteksi_yolo.jpg"
+    Image.fromarray(result.plot()).save(bbox_img_path)
+    bbox_img = Image.open(bbox_img_path)
+
+    # ====== TAMPILKAN GAMBAR ======
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.image(image, caption="Original", use_container_width=True)
+    with c2:
+        st.image(resized_img, caption="Resize 640x640", use_container_width=True)
+    with c3:
+        st.image(normalized_img, caption="Normalisasi", use_container_width=True)
+    with c4:
+        st.image(bbox_img, caption="Deteksi YOLOv8", use_container_width=True)
+
+    # ====== HASIL PREDIKSI ======
+    st.subheader("📌 Hasil Prediksi YOLOv8")
+    st.markdown(f"**Kelas:** `{predicted_label}`")
+    st.markdown(f"**Waktu Prediksi:** `{(end_time - start_time)*1000:.2f} ms`")
+
+    # ====== DESKRIPSI (FULL & SCROLLABLE) ======
+    desc = label_map_lower.get(str(predicted_label).lower(), "Deskripsi tidak ditemukan.")
+    st.markdown(f"""
+    <div style="
+        background-color:#e8f4fd;
+        padding:15px;
+        border-radius:8px;
+        border:1px solid #b3d7f2;
+        max-height:200px;
+        overflow-y:auto;
+        font-size:16px;
+        line-height:1.5;
+        text-align:justify;
+    ">
+        {desc}
+    </div>
+    """, unsafe_allow_html=True)
