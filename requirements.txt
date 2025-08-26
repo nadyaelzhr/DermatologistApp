@@ -1,7 +1,10 @@
 streamlit>=1.30.0
 numpy
-tensorflow>=2.18.0
 scikit-learn
 Pillow
 joblib
+torch>=1.8.0  # atau biarkan ultralytics yang handle jika tidak ingin konflik
+pandas
+ultralytics>=8.0.0
+opencv-python
 
